@@ -8,7 +8,7 @@
 
 # general configuration
 backend=pytorch
-stage=2       # start from -1 if you need to start from data download
+stage=5       # start from -1 if you need to start from data download
 stop_stage=100
 ngpu=1         # number of gpus ("0" uses cpu, otherwise use gpu)
 debugmode=1
@@ -258,7 +258,7 @@ if [ ${stage} -le 5 ] && [ ${stop_stage} -ge 5 ]; then
             --out ${expdir}/results/${recog_model} \
             --num ${n_average}
     fi
-    nj=40
+    nj=10
 
     pids=() # initialize pids
     for rtask in ${recog_set}; do
@@ -270,7 +270,7 @@ if [ ${stage} -le 5 ] && [ ${stop_stage} -ge 5 ]; then
         splitjson.py --parts ${nj} ${feat_recog_dir}/data_${bpemode}${nbpe}.json
 
         #### use CPU for decoding
-        #ngpu=0
+        ngpu=0
 
         # set batchsize 0 to disable batch decoding
         ${decode_cmd} JOB=1:${nj} ${expdir}/${decode_dir}/log/decode.JOB.log \
@@ -282,7 +282,7 @@ if [ ${stage} -le 5 ] && [ ${stop_stage} -ge 5 ]; then
             --recog-json ${feat_recog_dir}/split${nj}utt/data_${bpemode}${nbpe}.JOB.json \
             --result-label ${expdir}/${decode_dir}/data.JOB.json \
             --model ${expdir}/results/${recog_model}  \
-            --rnnlm ${lmexpdir}/rnnlm.model.best
+            --rnnlm ${lmexpdir}/rnnlm.model.bestmod
 
         score_sclite.sh --bpe ${nbpe} --bpemodel ${bpemodel}.model --wer true ${expdir}/${decode_dir} ${dict}
 
