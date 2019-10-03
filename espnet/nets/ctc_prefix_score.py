@@ -234,8 +234,9 @@ class CTCPrefixScore(object):
         output_length = len(y) - 1  # ignore sos
         # new CTC states are prepared as a frame x (n or b) x n_labels tensor
         # that corresponds to r_t^n(h) and r_t^b(h).
+        #cs = cs.cpu()
         r = self.xp.ndarray((self.input_length, 2, len(cs)), dtype=np.float32)
-        xs = self.x[:, cs]
+        xs = self.x[:, cs.cpu()]
         if output_length == 0:
             r[0, 0] = xs[0]
             r[0, 1] = self.logzero
@@ -262,7 +263,7 @@ class CTCPrefixScore(object):
             log_psi = self.xp.logaddexp(log_psi, log_phi[t - 1] + xs[t])
 
         # get P(...eos|X) that ends with the prefix itself
-        eos_pos = self.xp.where(cs == self.eos)[0]
+        eos_pos = self.xp.where(cs.cpu() == self.eos)[0]
         if len(eos_pos) > 0:
             log_psi[eos_pos] = r_sum[-1]  # log(r_T^n(g) + r_T^b(g))
 

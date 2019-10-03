@@ -281,7 +281,7 @@ class Decoder(torch.nn.Module, ScorerInterface):
         else:
             hyp = {'score': 0.0, 'yseq': [y], 'c_prev': c_list, 'z_prev': z_list, 'a_prev': a}
         if lpz is not None:
-            ctc_prefix_score = CTCPrefixScore(lpz.detach().numpy(), 0, self.eos, np)
+            ctc_prefix_score = CTCPrefixScore(lpz.detach().cpu().numpy(), 0, self.eos, np)
             hyp['ctc_state_prev'] = ctc_prefix_score.initial_state()
             hyp['ctc_score_prev'] = 0.0
             if ctc_weight != 1.0:
@@ -325,7 +325,7 @@ class Decoder(torch.nn.Module, ScorerInterface):
                         hyp['yseq'], local_best_ids[0], hyp['ctc_state_prev'])
                     local_scores = \
                         (1.0 - ctc_weight) * local_att_scores[:, local_best_ids[0]] \
-                        + ctc_weight * torch.from_numpy(ctc_scores - hyp['ctc_score_prev'])
+                        + ctc_weight * to_device(self, torch.from_numpy(ctc_scores - hyp['ctc_score_prev']))
                     if rnnlm:
                         local_scores += recog_args.lm_weight * local_lm_scores[:, local_best_ids[0]]
                     local_best_scores, joint_best_ids = torch.topk(local_scores, beam, dim=1)
