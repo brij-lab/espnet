@@ -8,9 +8,9 @@
 
 # general configuration
 backend=pytorch
-stage=-1       # start from -1 if you need to start from data download
+stage=5       # start from -1 if you need to start from data download
 stop_stage=100
-ngpu=4         # number of gpus ("0" uses cpu, otherwise use gpu)
+ngpu=2         # number of gpus ("0" uses cpu, otherwise use gpu)
 debugmode=1
 dumpdir=dump   # directory to dump full features
 N=0            # number of minibatches to be used (mainly for debugging). "0" uses all minibatches.
@@ -45,7 +45,7 @@ use_lm_valbest_average=false # if true, the validation `lm_n_average`-best langu
 # Set this to somewhere where you want to put your data, or where
 # someone else has already put it.  You'll want to change this
 # if you're not on the CLSP grid.
-datadir=/export/a15/vpanayotov/data
+datadir=/home/bsrivast/asr_data
 
 # base url for downloads.
 data_url=www.openslr.org/resources/12
@@ -65,7 +65,7 @@ set -e
 set -u
 set -o pipefail
 
-train_set=train_960
+train_set=train_460
 train_dev=dev
 recog_set="test_clean test_other dev_clean dev_other"
 
@@ -80,11 +80,13 @@ if [ ${stage} -le 0 ] && [ ${stop_stage} -ge 0 ]; then
     ### Task dependent. You have to make data the following preparation part by yourself.
     ### But you can utilize Kaldi recipes in most cases
     echo "stage 0: Data preparation"
-    for part in dev-clean test-clean dev-other test-other train-clean-100 train-clean-360 train-other-500; do
+    for part in dev-clean test-clean dev-other test-other train-clean-100 train-clean-360; do
         # use underscore-separated names in data directories.
-        local/data_prep.sh ${datadir}/LibriSpeech/${part} data/${part//-/_}
+        local/data_prep_adv.sh ${datadir}/LibriSpeech/${part} data/${part//-/_}
     done
 fi
+
+SECONDS=0
 
 feat_tr_dir=${dumpdir}/${train_set}/delta${do_delta}; mkdir -p ${feat_tr_dir}
 feat_dt_dir=${dumpdir}/${train_dev}/delta${do_delta}; mkdir -p ${feat_dt_dir}
@@ -94,13 +96,14 @@ if [ ${stage} -le 1 ] && [ ${stop_stage} -ge 1 ]; then
     echo "stage 1: Feature Generation"
     fbankdir=fbank
     # Generate the fbank features; by default 80-dimensional fbanks with pitch on each frame
-    for x in dev_clean test_clean dev_other test_other train_clean_100 train_clean_360 train_other_500; do
-        steps/make_fbank_pitch.sh --cmd "$train_cmd" --nj 32 --write_utt2num_frames true \
+    for x in dev_clean test_clean dev_other test_other train_clean_100 train_clean_360; do
+        steps/make_fbank_pitch.sh --cmd "$train_cmd" --nj 40 --write_utt2num_frames true \
             data/${x} exp/make_fbank/${x} ${fbankdir}
         utils/fix_data_dir.sh data/${x}
     done
 
-    utils/combine_data.sh --extra_files utt2num_frames data/${train_set}_org data/train_clean_100 data/train_clean_360 data/train_other_500
+    #utils/combine_data.sh --extra_files utt2num_frames data/${train_set}_org data/train_clean_100 data/train_clean_360 data/train_other_500
+    utils/combine_data.sh --extra_files utt2num_frames data/${train_set}_org data/train_clean_100 data/train_clean_360
     utils/combine_data.sh --extra_files utt2num_frames data/${train_dev}_org data/dev_clean data/dev_other
 
     # remove utt having more than 3000 frames
@@ -122,7 +125,7 @@ if [ ${stage} -le 1 ] && [ ${stop_stage} -ge 1 ]; then
         /export/b{14,15,16,17}/${USER}/espnet-data/egs/librispeech/asr1/dump/${train_dev}/delta${do_delta}/storage \
         ${feat_dt_dir}/storage
     fi
-    dump.sh --cmd "$train_cmd" --nj 80 --do_delta ${do_delta} \
+    dump.sh --cmd "$train_cmd" --nj 40 --do_delta ${do_delta} \
         data/${train_set}/feats.scp data/${train_set}/cmvn.ark exp/dump_feats/train ${feat_tr_dir}
     dump.sh --cmd "$train_cmd" --nj 32 --do_delta ${do_delta} \
         data/${train_dev}/feats.scp data/${train_set}/cmvn.ark exp/dump_feats/dev ${feat_dt_dir}
@@ -133,6 +136,11 @@ if [ ${stage} -le 1 ] && [ ${stop_stage} -ge 1 ]; then
             ${feat_recog_dir}
     done
 fi
+
+duration=$SECONDS
+echo "Features generated in $(($duration / 60)) minutes and $(($duration % 60)) seconds"
+
+SECONDS=0
 
 dict=data/lang_char/${train_set}_${bpemode}${nbpe}_units.txt
 bpemodel=data/lang_char/${train_set}_${bpemode}${nbpe}
@@ -160,6 +168,9 @@ if [ ${stage} -le 2 ] && [ ${stop_stage} -ge 2 ]; then
     done
 fi
 
+duration=$SECONDS
+echo "Dict and Json prepared in $(($duration / 60)) minutes and $(($duration % 60)) seconds"
+
 # You can skip this and remove --rnnlm option in the recognition (stage 5)
 if [ -z ${lmtag} ]; then
     lmtag=$(basename ${lm_config%.*})
@@ -167,6 +178,8 @@ fi
 lmexpname=train_rnnlm_${backend}_${lmtag}_${bpemode}${nbpe}
 lmexpdir=exp/${lmexpname}
 mkdir -p ${lmexpdir}
+
+SECONDS=0
 
 if [ ${stage} -le 3 ] && [ ${stop_stage} -ge 3 ]; then
     echo "stage 3: LM Preparation"
@@ -196,6 +209,9 @@ if [ ${stage} -le 3 ] && [ ${stop_stage} -ge 3 ]; then
         --dict ${dict}
 fi
 
+duration=$SECONDS
+echo "LM trained in $(($duration / 60)) minutes and $(($duration % 60)) seconds"
+
 if [ -z ${tag} ]; then
     expname=${train_set}_${backend}_$(basename ${train_config%.*})
     if ${do_delta}; then
@@ -209,6 +225,8 @@ else
 fi
 expdir=exp/${expname}
 mkdir -p ${expdir}
+
+SECONDS=0
 
 if [ ${stage} -le 4 ] && [ ${stop_stage} -ge 4 ]; then
     echo "stage 4: Network Training"
@@ -229,6 +247,11 @@ if [ ${stage} -le 4 ] && [ ${stop_stage} -ge 4 ]; then
         --train-json ${feat_tr_dir}/data_${bpemode}${nbpe}.json \
         --valid-json ${feat_dt_dir}/data_${bpemode}${nbpe}.json
 fi
+
+duration=$SECONDS
+echo "Network trained in $(($duration / 60)) minutes and $(($duration % 60)) seconds"
+
+SECONDS=0
 
 if [ ${stage} -le 5 ] && [ ${stop_stage} -ge 5 ]; then
     echo "stage 5: Decoding"
@@ -263,7 +286,7 @@ if [ ${stage} -le 5 ] && [ ${stop_stage} -ge 5 ]; then
             --out ${lmexpdir}/${lang_model} \
             --num ${lm_n_average}
     fi
-    nj=32
+    nj=10
 
     pids=() # initialize pids
     for rtask in ${recog_set}; do
@@ -275,7 +298,7 @@ if [ ${stage} -le 5 ] && [ ${stop_stage} -ge 5 ]; then
         splitjson.py --parts ${nj} ${feat_recog_dir}/data_${bpemode}${nbpe}.json
 
         #### use CPU for decoding
-        ngpu=0
+        ngpu=2
 
         # set batchsize 0 to disable batch decoding
         ${decode_cmd} JOB=1:${nj} ${expdir}/${decode_dir}/log/decode.JOB.log \
@@ -287,7 +310,7 @@ if [ ${stage} -le 5 ] && [ ${stop_stage} -ge 5 ]; then
             --recog-json ${feat_recog_dir}/split${nj}utt/data_${bpemode}${nbpe}.JOB.json \
             --result-label ${expdir}/${decode_dir}/data.JOB.json \
             --model ${expdir}/results/${recog_model}  \
-            --rnnlm ${lmexpdir}/${lang_model}
+            --rnnlm ${lmexpdir}/rnnlm.model.bestmod
 
         score_sclite.sh --bpe ${nbpe} --bpemodel ${bpemodel}.model --wer true ${expdir}/${decode_dir} ${dict}
 
@@ -298,3 +321,6 @@ if [ ${stage} -le 5 ] && [ ${stop_stage} -ge 5 ]; then
     [ ${i} -gt 0 ] && echo "$0: ${i} background jobs are failed." && false
     echo "Finished"
 fi
+
+duration=$SECONDS
+echo "Decoding done in $(($duration / 60)) minutes and $(($duration % 60)) seconds"
