@@ -8,9 +8,9 @@
 
 # general configuration
 backend=pytorch
-stage=0       # start from -1 if you need to start from data download
+stage=5       # start from -1 if you need to start from data download
 stop_stage=100
-ngpu=4         # number of gpus ("0" uses cpu, otherwise use gpu)
+ngpu=2         # number of gpus ("0" uses cpu, otherwise use gpu)
 debugmode=1
 dumpdir=dump   # directory to dump full features
 N=0            # number of minibatches to be used (mainly for debugging). "0" uses all minibatches.
@@ -45,7 +45,7 @@ use_lm_valbest_average=false # if true, the validation `lm_n_average`-best langu
 # Set this to somewhere where you want to put your data, or where
 # someone else has already put it.  You'll want to change this
 # if you're not on the CLSP grid.
-datadir=/home/bsrivastava/asr_data
+datadir=/home/bsrivast/asr_data
 
 # base url for downloads.
 data_url=www.openslr.org/resources/12
@@ -160,7 +160,7 @@ if [ -z ${lmtag} ]; then
 fi
 
 
-lmexpdir=exp/train_rnnlm_pytorch_1layer_unit1024_sgd_bs1024_unigram5000
+lmexpdir=exp/train_rnnlm_pytorch_lm_unigram5000
 : '
 lmexpname=train_rnnlm_${backend}_${lmtag}_${bpemode}${nbpe}
 lmexpdir=exp/${lmexpname}
@@ -278,17 +278,18 @@ if [ ${stage} -le 5 ] && [ ${stop_stage} -ge 5 ]; then
         splitjson.py --parts ${nj} ${feat_recog_dir}/data_${bpemode}${nbpe}.json
 
         #### use CPU for decoding
-        ngpu=1
+        ngpu=2
+	cgpu=$((i%ngpu))
 
-	echo "Launching job:" $i
+	echo "Launching job:" $i " on GPU: " $cgpu
 	# set batchsize 0 to disable batch decoding
 	#CUDA_VISIBLE_DEVICES="$cgpu" ${decode_cmd} ${expdir}/${decode_dir}/log/decode.$JOB.log \
-	CUDA_VISIBLE_DEVICES="$i" ${decode_cmd} JOB=1:${nj} ${expdir}/${decode_dir}/log/decode.JOB.log \
+	CUDA_VISIBLE_DEVICES="$cgpu" ${decode_cmd} JOB=1:${nj} ${expdir}/${decode_dir}/log/decode.JOB.log \
 	    asr_recog.py \
 	    --config ${decode_config} \
 	    --ngpu 1 \
 	    --backend ${backend} \
-	    --batchsize 2 \
+	    --batchsize 0 \
 	    --recog-json ${feat_recog_dir}/split${nj}utt/data_${bpemode}${nbpe}.JOB.json \
 	    --result-label ${expdir}/${decode_dir}/data.JOB.json \
 	    --model ${expdir}/results/${recog_model}  \
