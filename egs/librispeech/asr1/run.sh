@@ -10,7 +10,8 @@
 backend=pytorch
 stage=5       # start from -1 if you need to start from data download
 stop_stage=100
-ngpu=2         # number of gpus ("0" uses cpu, otherwise use gpu)
+ngpu=4         # number of gpus ("0" uses cpu, otherwise use gpu)
+nj=32
 debugmode=1
 dumpdir=dump   # directory to dump full features
 N=0            # number of minibatches to be used (mainly for debugging). "0" uses all minibatches.
@@ -38,7 +39,7 @@ lang_model=rnnlm.model.best # set a language model to be used for decoding
 n_average=5                  # the number of ASR models to be averaged
 use_valbest_average=true     # if true, the validation `n_average`-best ASR models will be averaged.
                              # if false, the last `n_average` ASR models will be averaged.
-lm_n_average=6               # the number of languge models to be averaged
+lm_n_average=0               # the number of languge models to be averaged
 use_lm_valbest_average=false # if true, the validation `lm_n_average`-best language models will be averaged.
                              # if false, the last `lm_n_average` language models will be averaged.
 
@@ -96,8 +97,8 @@ if [ ${stage} -le 1 ] && [ ${stop_stage} -ge 1 ]; then
     echo "stage 1: Feature Generation"
     fbankdir=fbank
     # Generate the fbank features; by default 80-dimensional fbanks with pitch on each frame
-    for x in dev_clean test_clean dev_other test_other train_clean_100 train_clean_360; do
-        steps/make_fbank_pitch.sh --cmd "$train_cmd" --nj 40 --write_utt2num_frames true \
+    for x in dev_clean test_clean dev_other test_other train_clean_100 train_clean_360 train_other_500; do
+        steps/make_fbank_pitch.sh --cmd "$train_cmd" --nj ${nj} --write_utt2num_frames true \
             data/${x} exp/make_fbank/${x} ${fbankdir}
         utils/fix_data_dir.sh data/${x}
     done
@@ -125,13 +126,13 @@ if [ ${stage} -le 1 ] && [ ${stop_stage} -ge 1 ]; then
         /export/b{14,15,16,17}/${USER}/espnet-data/egs/librispeech/asr1/dump/${train_dev}/delta${do_delta}/storage \
         ${feat_dt_dir}/storage
     fi
-    dump.sh --cmd "$train_cmd" --nj 40 --do_delta ${do_delta} \
+    dump.sh --cmd "$train_cmd" --nj ${nj} --do_delta ${do_delta} \
         data/${train_set}/feats.scp data/${train_set}/cmvn.ark exp/dump_feats/train ${feat_tr_dir}
-    dump.sh --cmd "$train_cmd" --nj 32 --do_delta ${do_delta} \
+    dump.sh --cmd "$train_cmd" --nj ${nj} --do_delta ${do_delta} \
         data/${train_dev}/feats.scp data/${train_set}/cmvn.ark exp/dump_feats/dev ${feat_dt_dir}
     for rtask in ${recog_set}; do
         feat_recog_dir=${dumpdir}/${rtask}/delta${do_delta}; mkdir -p ${feat_recog_dir}
-        dump.sh --cmd "$train_cmd" --nj 32 --do_delta ${do_delta} \
+        dump.sh --cmd "$train_cmd" --nj ${nj} --do_delta ${do_delta} \
             data/${rtask}/feats.scp data/${train_set}/cmvn.ark exp/dump_feats/recog/${rtask} \
             ${feat_recog_dir}
     done
@@ -175,7 +176,7 @@ echo "Dict and Json prepared in $(($duration / 60)) minutes and $(($duration % 6
 if [ -z ${lmtag} ]; then
     lmtag=$(basename ${lm_config%.*})
 fi
-lmexpname=train_rnnlm_${backend}_${lmtag}_${bpemode}${nbpe}
+lmexpname=train_rnnlm_${backend}_${lmtag}_${bpemode}${nbpe}_ngpu${ngpu}
 lmexpdir=exp/${lmexpname}
 mkdir -p ${lmexpdir}
 
@@ -184,17 +185,19 @@ SECONDS=0
 if [ ${stage} -le 3 ] && [ ${stop_stage} -ge 3 ]; then
     echo "stage 3: LM Preparation"
     lmdatadir=data/local/lm_train_${bpemode}${nbpe}
-    mkdir -p ${lmdatadir}
     # use external data
     if [ ! -e data/local/lm_train/librispeech-lm-norm.txt.gz ]; then
         wget http://www.openslr.org/resources/11/librispeech-lm-norm.txt.gz -P data/local/lm_train/
     fi
-    cut -f 2- -d" " data/${train_set}/text | gzip -c > data/local/lm_train/${train_set}_text.gz
-    # combine external text and transcriptions and shuffle them with seed 777
-    zcat data/local/lm_train/librispeech-lm-norm.txt.gz data/local/lm_train/${train_set}_text.gz |\
-        spm_encode --model=${bpemodel}.model --output_format=piece > ${lmdatadir}/train.txt
-    cut -f 2- -d" " data/${train_dev}/text | spm_encode --model=${bpemodel}.model --output_format=piece \
-        > ${lmdatadir}/valid.txt
+    if [ ! -e ${lmdatadir} ]; then
+        mkdir -p ${lmdatadir}
+        cut -f 2- -d" " data/${train_set}/text | gzip -c > data/local/lm_train/${train_set}_text.gz
+        # combine external text and transcriptions and shuffle them with seed 777
+        zcat data/local/lm_train/librispeech-lm-norm.txt.gz data/local/lm_train/${train_set}_text.gz |\
+            spm_encode --model=${bpemodel}.model --output_format=piece > ${lmdatadir}/train.txt
+        cut -f 2- -d" " data/${train_dev}/text | spm_encode --model=${bpemodel}.model --output_format=piece \
+                                                            > ${lmdatadir}/valid.txt
+    fi
     ${cuda_cmd} --gpu ${ngpu} ${lmexpdir}/train.log \
         lm_train.py \
         --config ${lm_config} \
@@ -206,7 +209,8 @@ if [ ${stage} -le 3 ] && [ ${stop_stage} -ge 3 ]; then
         --train-label ${lmdatadir}/train.txt \
         --valid-label ${lmdatadir}/valid.txt \
         --resume ${lm_resume} \
-        --dict ${dict}
+        --dict ${dict} \
+        --dump-hdf5-path ${lmdatadir}
 fi
 
 duration=$SECONDS
@@ -272,21 +276,24 @@ if [ ${stage} -le 5 ] && [ ${stop_stage} -ge 5 ]; then
             --num ${n_average}
 
         # Average LM models
-        if ${use_lm_valbest_average}; then
-            lang_model=rnnlm.val${lm_n_average}.avg.best
-            opt="--log ${lmexpdir}/log"
+        if [ ${lm_n_average} -eq 0 ]; then
+            lang_model=rnnlm.model.best
         else
-            lang_model=rnnlm.last${lm_n_average}.avg.best
-            opt="--log"
+            if ${use_lm_valbest_average}; then
+                lang_model=rnnlm.val${lm_n_average}.avg.best
+                opt="--log ${lmexpdir}/log"
+            else
+                lang_model=rnnlm.last${lm_n_average}.avg.best
+                opt="--log"
+            fi
+            average_checkpoints.py \
+                ${opt} \
+                --backend ${backend} \
+                --snapshots ${lmexpdir}/snapshot.ep.* \
+                --out ${lmexpdir}/${lang_model} \
+                --num ${lm_n_average}
         fi
-        average_checkpoints.py \
-            ${opt} \
-            --backend ${backend} \
-            --snapshots ${lmexpdir}/snapshot.ep.* \
-            --out ${lmexpdir}/${lang_model} \
-            --num ${lm_n_average}
     fi
-    nj=2
 
     pids=() # initialize pids
     recog_arr=($(echo ${recog_set} | tr " " "\n"))
@@ -318,9 +325,8 @@ if [ ${stage} -le 5 ] && [ ${stop_stage} -ge 5 ]; then
             --recog-json ${feat_recog_dir}/split${nj}utt/data_${bpemode}${nbpe}.JOB.json \
             --result-label ${expdir}/${decode_dir}/data.JOB.json \
             --model ${expdir}/results/${recog_model}  \
-            --rnnlm ${lmexpdir}/rnnlm.model.bestmod \
-	    --api v2 \
-	    --dtype float16
+            --rnnlm ${lmexpdir}/${lang_model} \
+            --api v2
 
         score_sclite.sh --bpe ${nbpe} --bpemodel ${bpemodel}.model --wer true ${expdir}/${decode_dir} ${dict}
 

@@ -48,7 +48,8 @@ for reader_dir in $(find -L $src -mindepth 1 -maxdepth 1 -type d | sed -e "s/$/_
       exit 1
     fi
 
-    spk="${reader}_${chapter}"
+    spk="${reader}"
+    #spk="${reader}_${chapter}"
 
     find -L $chapter_dir/ -iname "*.wav" | sort | while read -r wav_file; do
        id=$(basename $wav_file .wav)
