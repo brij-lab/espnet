@@ -147,6 +147,9 @@ if [ ${stage} -le 2 ] && [ ${stop_stage} -ge 2 ]; then
     spm_encode --model=${bpemodel}.model --output_format=piece < data/lang_char/input.txt | tr ' ' '\n' | sort | uniq | awk '{print $0 " " NR+1}' >> ${dict}
     wc -l ${dict}
 
+    # Make speaker ids for train_600 (data/spk2id)
+    local/make_spkid.sh ${asr_data} "train-clean-100|train-other-500"
+
     # make json labels
     data2json.sh --feat ${feat_tr_dir}/feats.scp --bpecode ${bpemodel}.model \
         data/${train_set} ${dict} > ${feat_tr_dir}/data_${bpemode}${nbpe}.json
@@ -163,46 +166,6 @@ fi
 duration=$SECONDS
 echo "Dict and Json prepared in $(($duration / 60)) minutes and $(($duration % 60)) seconds"
 
-# You can skip this and remove --rnnlm option in the recognition (stage 5)
-if [ -z ${lmtag} ]; then
-    lmtag=$(basename ${lm_config%.*})
-fi
-lmexpname=train_rnnlm_${backend}_${lmtag}_${bpemode}${nbpe}
-lmexpdir=exp/${lmexpname}
-mkdir -p ${lmexpdir}
-
-SECONDS=0
-
-if [ ${stage} -le 3 ] && [ ${stop_stage} -ge 3 ] && false; then
-    echo "stage 3: LM Preparation"
-    lmdatadir=data/local/lm_train_${bpemode}${nbpe}
-    mkdir -p ${lmdatadir}
-    # use external data
-    if [ ! -e data/local/lm_train/librispeech-lm-norm.txt.gz ]; then
-        wget http://www.openslr.org/resources/11/librispeech-lm-norm.txt.gz -P data/local/lm_train/
-    fi
-    cut -f 2- -d" " data/${train_set}/text | gzip -c > data/local/lm_train/${train_set}_text.gz
-    # combine external text and transcriptions and shuffle them with seed 777
-    zcat data/local/lm_train/librispeech-lm-norm.txt.gz data/local/lm_train/${train_set}_text.gz |\
-        spm_encode --model=${bpemodel}.model --output_format=piece > ${lmdatadir}/train.txt
-    cut -f 2- -d" " data/${train_dev}/text | spm_encode --model=${bpemodel}.model --output_format=piece \
-        > ${lmdatadir}/valid.txt
-    ${cuda_cmd} --gpu ${ngpu} ${lmexpdir}/train.log \
-        lm_train.py \
-        --config ${lm_config} \
-        --ngpu ${ngpu} \
-        --backend ${backend} \
-        --verbose 1 \
-        --outdir ${lmexpdir} \
-        --tensorboard-dir tensorboard/${lmexpname} \
-        --train-label ${lmdatadir}/train.txt \
-        --valid-label ${lmdatadir}/valid.txt \
-        --resume ${lm_resume} \
-        --dict ${dict}
-fi
-
-duration=$SECONDS
-echo "LM trained in $(($duration / 60)) minutes and $(($duration % 60)) seconds"
 
 if [ -z ${tag} ]; then
     expname=${train_set}_${backend}_$(basename ${train_config%.*})
@@ -223,7 +186,7 @@ SECONDS=0
 if [ ${stage} -le 4 ] && [ ${stop_stage} -ge 4 ]; then
     echo "stage 4: Network Training"
     ${cuda_cmd} --gpu ${ngpu} ${expdir}/train.log \
-        asr_train.py \
+        asr_train_adv.py \
         --config ${train_config} \
         --preprocess-conf ${preprocess_config} \
         --ngpu ${ngpu} \
